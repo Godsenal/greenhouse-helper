@@ -1,29 +1,20 @@
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log("Received command:", request.command);
+function waitForElement(selector, timeout = 5000) {
+  return new Promise((resolve, reject) => {
+    const waitInterval = setInterval(() => {
+      const element = document.querySelector(selector);
 
-  switch (request.command) {
-    case "open-applicant-links":
-      openAllApplicantLinks();
-      break;
-    case "open-resume":
-      openResume();
-      break;
-    case "open-cover-letter":
-      openCoverLetter();
-      break;
-    case "move-stage":
-      moveStage();
-      break;
-    case "reject-by-qualification-mismatch":
-      rejectByQualificationMismatch();
-      break;
-    default:
-      console.log("알 수 없는 명령어:", request.command);
-  }
+      if (element) {
+        clearInterval(waitInterval);
+        resolve(element);
+      }
+    }, 100);
 
-  sendResponse({ status: "ok" });
-  return true;
-});
+    setTimeout(() => {
+      clearInterval(waitInterval);
+      reject(new Error("Element not found"));
+    }, timeout);
+  });
+}
 
 function openAllApplicantLinks() {
   if (window.location.pathname !== "/people") {
@@ -64,6 +55,18 @@ function openCoverLetter() {
   }
 }
 
+function reject() {
+  const rejectButton = document.querySelector(
+    'button[data-provides="open-reject-modal"]'
+  );
+
+  if (rejectButton) {
+    rejectButton.click();
+  } else {
+    console.log("Reject button not found");
+  }
+}
+
 function moveStage() {
   const moveStageButton = document.querySelector(
     'button[data-provides="move-stage-modal"]'
@@ -76,54 +79,115 @@ function moveStage() {
 }
 
 function rejectByQualificationMismatch() {
-  const rejectButton = document.querySelector(
-    'button[data-provides="open-reject-modal"]'
-  );
+  reject();
 
-  if (rejectButton) {
-    rejectButton.click();
-  } else {
-    console.log("Reject button not found");
-    return;
-  }
-
-  const checkForm = setInterval(() => {
-    const rejectForm = document.querySelector("form[name='reject-modal']");
+  waitForElement("form[name='reject-modal']").then((rejectForm) => {
     const reasonInput = rejectForm?.querySelector(
       'input[name="rejection_reason"]'
     );
 
     if (reasonInput) {
-      clearInterval(checkForm);
       reasonInput.value = "불합격(Qualifications Mismatch)";
       rejectForm.querySelector("button[type='submit']").click();
     }
-  }, 100);
-
-  setTimeout(() => clearInterval(checkForm), 5000);
+  });
 }
+
+function moveNextStage() {
+  moveStage();
+
+  const modal = document.querySelector(
+    "div[role='dialog'][aria-label='move-stage-modal']"
+  );
+  const nextStageButton = modal?.querySelector(
+    "span[data-autofocus-inside='true'] button"
+  );
+  if (nextStageButton) {
+    nextStageButton.click();
+  }
+}
+
+const commands = {
+  "open-applicant-links": { handler: openAllApplicantLinks, keyCode: 79 },
+  "open-resume": { handler: openResume, keyCode: 82 },
+  "open-cover-letter": { handler: openCoverLetter, keyCode: 67 },
+  reject: { handler: reject, keyCode: 74 },
+  "move-stage": { handler: moveStage, keyCode: 77 },
+  "move-next-stage": { handler: moveNextStage, keyCode: 78 },
+  "reject-by-qualification-mismatch": {
+    handler: rejectByQualificationMismatch,
+    keyCode: 81,
+  },
+};
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  console.log("Received command:", request.command);
+
+  const command = commands[request.command];
+
+  if (command) {
+    command.handler();
+  }
+
+  sendResponse({ status: "ok" });
+  return true;
+});
 
 document.addEventListener("keydown", (event) => {
   if (event.altKey && event.shiftKey) {
-    switch (event.keyCode) {
-      case 79:
-        openAllApplicantLinks();
-        break;
-      case 82:
-        openResume();
-        break;
-      case 67:
-        openCoverLetter();
-        break;
-      case 77:
-        moveStage();
-        break;
-      case 74:
-        rejectByQualificationMismatch();
-        break;
-      default:
-        break;
+    const command = Object.values(commands).find(
+      (command) => command.keyCode === event.keyCode
+    );
+
+    if (command) {
+      command.handler();
     }
+
     event.preventDefault();
   }
 });
+
+if (window.location.pathname === "/people") {
+  function addOpenInNewTabButtons() {
+    const persons = document.querySelectorAll("table.person");
+
+    console.log(persons);
+
+    persons.forEach((personTable) => {
+      const nameTd = personTable.querySelector(".person-info-column");
+      const jobInfoTd = personTable.querySelector(".job-info-column");
+
+      if (nameTd && jobInfoTd) {
+        const jobHref = jobInfoTd.getAttribute("href");
+        if (jobHref && !nameTd.querySelector(".open-new-tab-button")) {
+          // 중복 버튼 방지
+          const button = document.createElement("button");
+          button.textContent = "새 탭에서 열기"; // "Open in New Tab"
+          button.className = "open-new-tab-button";
+          button.style.marginLeft = "10px";
+          button.addEventListener("click", (e) => {
+            e.stopPropagation();
+            window.open(jobHref, "_blank");
+          });
+          nameTd.appendChild(button);
+        }
+      }
+    });
+  }
+
+  addOpenInNewTabButtons();
+
+  const observer = new MutationObserver((mutationsList) => {
+    for (const mutation of mutationsList) {
+      if (mutation.type === "childList") {
+        addOpenInNewTabButtons();
+      }
+    }
+  });
+
+  // 대상 노드를 관찰하도록 설정
+  const targetNode = document.getElementById("content"); // 필요에 따라 선택자 조정
+  if (targetNode) {
+    observer.observe(targetNode, { childList: true, subtree: true });
+  }
+}
